@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
+	"io"
 )
 
 const headerSize = 8
@@ -59,4 +60,41 @@ func Decode(buf []byte) ([]byte, int, error) {
 	}
 
 	return payload, end, nil
+}
+
+// Read reads one record from r and returns a fresh copy of its payload.
+// Returns io.EOF at a clean end, ErrIncomplete if cut off, ErrCorrupt if damaged.
+func Read(r io.Reader) ([]byte, error) {
+	var hdr [headerSize]byte // Makes rrom for header
+
+	// read exactly 8 header bytes. ReadFull keeps reading until full (handles short reads)
+	_, err := io.ReadFull(r, hdr[:])
+	if errors.Is(err, io.EOF) { // 0 bytes read
+		return nil, io.EOF
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) { // 1-7 bytes read (header cut off)
+		return nil, ErrIncomplete
+	}
+	if err != nil { // any other failure (disk, network, etc)
+		return nil, err
+	}
+
+	length := int(binary.BigEndian.Uint32(hdr[0:4])) // payload length
+	if length > maxPayloadSize {                     // impossible length = damged; check before allocating
+		return nil, ErrCorrupt
+	}
+
+	buf := make([]byte, headerSize+length) // room for whole record
+	copy(buf[:headerSize], hdr[:])         // header at front
+
+	_, err = io.ReadFull(r, buf[headerSize:]) // read payload into rest of buf. any EOF means mid-record
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, ErrIncomplete
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	payload, _, err := Decode(buf) // checks CRC. payload points to buf, only caller has
+	return payload, err
 }
