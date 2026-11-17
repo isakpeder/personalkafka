@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"testing"
+	"testing/iotest"
 )
 
 func TestEncodeLayout(t *testing.T) {
@@ -187,5 +189,85 @@ func TestDecodeConsecutive(t *testing.T) {
 	}
 	if n1+n2 != len(buf) {
 		t.Errorf("n1+n2 = %d, want %d", n1+n2, len(buf))
+	}
+}
+
+// readAll calls Read until it fails and returns the payloads read and the final error.
+func readAll(r io.Reader) ([]string, error) {
+	var payloads []string
+	for {
+		payload, err := Read(r)
+		if err != nil {
+			return payloads, err
+		}
+		payloads = append(payloads, string(payload))
+	}
+}
+
+func TestReadSequence(t *testing.T) {
+	stream := append(mustEncode(t, []byte("first")), mustEncode(t, []byte("second"))...)
+
+	got, err := readAll(bytes.NewReader(stream))
+	if !errors.Is(err, io.EOF) {
+		t.Errorf("final err = %v, want io.EOF", err)
+	}
+	if len(got) != 2 || got[0] != "first" || got[1] != "second" {
+		t.Errorf("payloads = %q, want [first second]", got)
+	}
+}
+
+func TestReadEmpty(t *testing.T) {
+	if _, err := Read(bytes.NewReader(nil)); !errors.Is(err, io.EOF) {
+		t.Errorf("err = %v, want io.EOF", err)
+	}
+}
+
+func TestReadTruncated(t *testing.T) {
+	rec := mustEncode(t, []byte("hello"))
+
+	// Starts at 1: zero bytes is a clean end, not a cut-off record.
+	for i := 1; i < len(rec); i++ {
+		if _, err := Read(bytes.NewReader(rec[:i])); !errors.Is(err, ErrIncomplete) {
+			t.Errorf("Read(rec[:%d]): err = %v, want ErrIncomplete", i, err)
+		}
+	}
+}
+
+func TestReadCorrupt(t *testing.T) {
+	rec := mustEncode(t, []byte("hello"))
+	rec[headerSize] ^= 0xFF
+
+	if _, err := Read(bytes.NewReader(rec)); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("err = %v, want ErrCorrupt", err)
+	}
+}
+
+func TestReadLengthTooLarge(t *testing.T) {
+	rec := mustEncode(t, []byte("hello"))
+	binary.BigEndian.PutUint32(rec[0:4], maxPayloadSize+1)
+
+	if _, err := Read(bytes.NewReader(rec)); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("err = %v, want ErrCorrupt", err)
+	}
+}
+
+func TestReadOneByteAtATime(t *testing.T) {
+	stream := append(mustEncode(t, []byte("first")), mustEncode(t, []byte("second"))...)
+
+	// Every Read call returns at most one byte: the worst case of short reads.
+	got, err := readAll(iotest.OneByteReader(bytes.NewReader(stream)))
+	if !errors.Is(err, io.EOF) {
+		t.Errorf("final err = %v, want io.EOF", err)
+	}
+	if len(got) != 2 || got[0] != "first" || got[1] != "second" {
+		t.Errorf("payloads = %q, want [first second]", got)
+	}
+}
+
+func TestReadPassesThroughErrors(t *testing.T) {
+	errDisk := errors.New("disk failure")
+
+	if _, err := Read(iotest.ErrReader(errDisk)); !errors.Is(err, errDisk) {
+		t.Errorf("err = %v, want %v", err, errDisk)
 	}
 }
