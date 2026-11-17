@@ -10,6 +10,8 @@ const headerSize = 8
 const maxPayloadSize = 1048576
 
 var ErrTooLarge = errors.New("record: payload too large") // Sentinel error for data payload exceeds max record size
+var ErrIncomplete = errors.New("record: incomplete")      // Sentinel error for incomplete record (short header or payload)
+var ErrCorrupt = errors.New("record: corrupt")            // Wrong bytes (CRC mismatch or impossible length)
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
@@ -30,4 +32,31 @@ func Encode(payload []byte) ([]byte, error) {
 	copy(buf[headerSize:], payload)           // copies payload bytes into buf
 
 	return buf, nil
+}
+
+// Returns the data payload, the number of bytes the record used, and an error
+// The returned payload points into buf, not a copy. It changes if buf is changed.
+func Decode(buf []byte) ([]byte, int, error) {
+	if len(buf) < headerSize {
+		return nil, 0, ErrIncomplete
+	}
+
+	length := int(binary.BigEndian.Uint32(buf[0:4]))
+	if length > maxPayloadSize {
+		return nil, 0, ErrCorrupt
+	}
+
+	end := headerSize + length
+	if len(buf) < end {
+		return nil, 0, ErrIncomplete
+	}
+
+	payload := buf[headerSize:end]
+	want := binary.BigEndian.Uint32(buf[4:8])
+	got := crc32.Checksum(payload, crcTable)
+	if got != want {
+		return nil, 0, ErrCorrupt
+	}
+
+	return payload, end, nil
 }
