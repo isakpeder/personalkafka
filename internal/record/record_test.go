@@ -88,3 +88,104 @@ func TestEncodeDoesNotMutatePayload(t *testing.T) {
 		t.Errorf("payload changed: got %q, want %q", payload, saved)
 	}
 }
+
+// mustEncode encodes payload and fails the test if that errors.
+func mustEncode(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	rec, err := Encode(payload)
+	if err != nil {
+		t.Fatalf("Encode: unexpected error: %v", err)
+	}
+	return rec
+}
+
+func TestDecodeRoundTrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload []byte
+	}{
+		{"hello", []byte("hello")},
+		{"empty", []byte{}},
+		{"nil", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := mustEncode(t, tc.payload)
+
+			payload, n, err := Decode(rec)
+			if err != nil {
+				t.Fatalf("Decode: unexpected error: %v", err)
+			}
+			if !bytes.Equal(payload, tc.payload) {
+				t.Errorf("payload = %q, want %q", payload, tc.payload)
+			}
+			if n != len(rec) {
+				t.Errorf("n = %d, want %d", n, len(rec))
+			}
+		})
+	}
+}
+
+func TestDecodeTruncated(t *testing.T) {
+	rec := mustEncode(t, []byte("hello"))
+
+	// A crash can cut a record off at any byte; every prefix must be incomplete.
+	for i := 0; i < len(rec); i++ {
+		if _, _, err := Decode(rec[:i]); !errors.Is(err, ErrIncomplete) {
+			t.Errorf("Decode(rec[:%d]): err = %v, want ErrIncomplete", i, err)
+		}
+	}
+}
+
+func TestDecodeCorrupt(t *testing.T) {
+	tests := []struct {
+		name string
+		pos  int
+	}{
+		{"payload byte", headerSize},
+		{"crc byte", 4},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := mustEncode(t, []byte("hello"))
+			rec[tc.pos] ^= 0xFF
+
+			if _, _, err := Decode(rec); !errors.Is(err, ErrCorrupt) {
+				t.Errorf("err = %v, want ErrCorrupt", err)
+			}
+		})
+	}
+}
+
+func TestDecodeLengthTooLarge(t *testing.T) {
+	rec := mustEncode(t, []byte("hello"))
+	binary.BigEndian.PutUint32(rec[0:4], maxPayloadSize+1)
+
+	// Without the max check this would look incomplete, and a reader would
+	// wait forever for bytes that never come.
+	if _, _, err := Decode(rec); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("err = %v, want ErrCorrupt", err)
+	}
+}
+
+func TestDecodeConsecutive(t *testing.T) {
+	first := mustEncode(t, []byte("first"))
+	second := mustEncode(t, []byte("second"))
+	buf := append(first, second...)
+
+	p1, n1, err := Decode(buf)
+	if err != nil {
+		t.Fatalf("Decode first: unexpected error: %v", err)
+	}
+	p2, n2, err := Decode(buf[n1:])
+	if err != nil {
+		t.Fatalf("Decode second: unexpected error: %v", err)
+	}
+
+	if string(p1) != "first" || string(p2) != "second" {
+		t.Errorf("payloads = %q, %q, want \"first\", \"second\"", p1, p2)
+	}
+	if n1+n2 != len(buf) {
+		t.Errorf("n1+n2 = %d, want %d", n1+n2, len(buf))
+	}
+}
