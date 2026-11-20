@@ -16,8 +16,8 @@ var ErrCorrupt = errors.New("record: corrupt")            // Wrong bytes (CRC mi
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
-// Returns a payload framed as a record: its length, its CRC-32C checksum, and a copy of its bytes.
-// The result is a signle slice (so it cna be appended to a segment in one write).
+// Encode returns a payload framed as a record: its length, its CRC-32C checksum, and a copy of its bytes.
+// The result is a single slice (so it can be appended to a segment in one write).
 func Encode(payload []byte) ([]byte, error) {
 	if len(payload) > maxPayloadSize {
 		return nil, ErrTooLarge
@@ -35,7 +35,7 @@ func Encode(payload []byte) ([]byte, error) {
 	return buf, nil
 }
 
-// Returns the data payload, the number of bytes the record used, and an error
+// Decode returns the data payload, the number of bytes the record used, and an error.
 // The returned payload points into buf, not a copy. It changes if buf is changed.
 func Decode(buf []byte) ([]byte, int, error) {
 	if len(buf) < headerSize {
@@ -65,7 +65,7 @@ func Decode(buf []byte) ([]byte, int, error) {
 // Read reads one record from r and returns a fresh copy of its payload.
 // Returns io.EOF at a clean end, ErrIncomplete if cut off, ErrCorrupt if damaged.
 func Read(r io.Reader) ([]byte, error) {
-	var hdr [headerSize]byte // Makes rrom for header
+	var hdr [headerSize]byte // Makes room for header
 
 	// read exactly 8 header bytes. ReadFull keeps reading until full (handles short reads)
 	_, err := io.ReadFull(r, hdr[:])
