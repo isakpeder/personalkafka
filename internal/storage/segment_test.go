@@ -18,7 +18,7 @@ func mustOpen(t *testing.T, dir string, baseOffset int64) *segment {
 	if err != nil {
 		t.Fatalf("openSegment: unexpected error: %v", err)
 	}
-	t.Cleanup(func() { s.file.Close() })
+	t.Cleanup(func() { s.close() })
 	return s
 }
 
@@ -129,8 +129,8 @@ func TestReopenSegment(t *testing.T) {
 	s := mustOpen(t, dir, 1000)
 	mustAppend(t, s, "hi")
 	mustAppend(t, s, "hello")
-	if err := s.file.Close(); err != nil {
-		t.Fatalf("Close: unexpected error: %v", err)
+	if err := s.close(); err != nil {
+		t.Fatalf("close: unexpected error: %v", err)
 	}
 
 	s = mustOpen(t, dir, 1000)

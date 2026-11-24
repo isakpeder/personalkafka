@@ -123,3 +123,18 @@ func (s *segment) readAt(pos int64) ([]byte, error) {
 	section := io.NewSectionReader(s.file, pos, s.size-pos) // only the bytes from pos to end of good data
 	return record.Read(section)                             // reads one record and checks its CRC
 }
+
+// forces the file's data onto physical disk -> ultimately to survive power cut
+func (s *segment) sync() error {
+	return s.file.Sync()
+}
+
+// puts data on the disk, then closes file (closes even if sync fails)
+func (s *segment) close() error {
+	return errors.Join(s.sync(), s.file.Close())
+}
+
+// closes file, then deletes it
+func (s *segment) remove() error {
+	return errors.Join(s.file.Close(), os.Remove(s.file.Name()))
+}
