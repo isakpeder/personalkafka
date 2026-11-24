@@ -113,3 +113,13 @@ func (s *segment) append(payload []byte) (offset, pos int64, err error) {
 	s.nextOffset++     // and gets the next number
 	return offset, pos, nil
 }
+
+// returns the payload of the record that starts at byte pos
+func (s *segment) readAt(pos int64) ([]byte, error) {
+	if pos < 0 || pos > s.size { // pos == s.size is allowed, there's just no record there yet
+		return nil, fmt.Errorf("storage: position %d outside segment", pos)
+	}
+
+	section := io.NewSectionReader(s.file, pos, s.size-pos) // only the bytes from pos to end of good data
+	return record.Read(section)                             // reads one record and checks its CRC
+}

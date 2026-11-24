@@ -198,3 +198,110 @@ func TestAppendFailedWrite(t *testing.T) {
 		t.Errorf("size, nextOffset = %d, %d, want 10, 1001", s.size, s.nextOffset)
 	}
 }
+
+// mustReadAt reads the record at pos and returns its payload, failing the test on error.
+func mustReadAt(t *testing.T, s *segment, pos int64) string {
+	t.Helper()
+	payload, err := s.readAt(pos)
+	if err != nil {
+		t.Fatalf("readAt(%d): unexpected error: %v", pos, err)
+	}
+	return string(payload)
+}
+
+func TestReadAtAnyOrder(t *testing.T) {
+	s := mustOpen(t, t.TempDir(), 1000)
+	mustAppend(t, s, "hi")
+	mustAppend(t, s, "hello")
+
+	if got := mustReadAt(t, s, 10); got != "hello" {
+		t.Errorf("readAt(10) = %q, want %q", got, "hello")
+	}
+	if got := mustReadAt(t, s, 0); got != "hi" {
+		t.Errorf("readAt(0) = %q, want %q", got, "hi")
+	}
+}
+
+func TestAppendAfterReadAt(t *testing.T) {
+	s := mustOpen(t, t.TempDir(), 1000)
+	mustAppend(t, s, "hi")
+	mustAppend(t, s, "hello")
+	mustReadAt(t, s, 0)
+
+	if _, pos := mustAppend(t, s, "again"); pos != 23 {
+		t.Errorf("position after read = %d, want 23", pos)
+	}
+	if got := mustReadAt(t, s, 23); got != "again" {
+		t.Errorf("readAt(23) = %q, want %q", got, "again")
+	}
+}
+
+func TestReadAtEnd(t *testing.T) {
+	s := mustOpen(t, t.TempDir(), 1000)
+	mustAppend(t, s, "hi")
+
+	if _, err := s.readAt(10); !errors.Is(err, io.EOF) {
+		t.Errorf("err = %v, want io.EOF", err)
+	}
+}
+
+func TestReadAtOutside(t *testing.T) {
+	s := mustOpen(t, t.TempDir(), 1000)
+	mustAppend(t, s, "hi")
+
+	for _, pos := range []int64{-1, 11} {
+		if _, err := s.readAt(pos); err == nil || errors.Is(err, io.EOF) {
+			t.Errorf("readAt(%d): err = %v, want an out of range error", pos, err)
+		}
+	}
+}
+
+func TestReadAtCorrupt(t *testing.T) {
+	s := mustOpen(t, t.TempDir(), 1000)
+	mustAppend(t, s, "hi")
+
+	// s.file can only write at the end, so damage the record through a second open file.
+	f, err := os.OpenFile(s.file.Name(), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("os.OpenFile: unexpected error: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.WriteAt([]byte{'X'}, 8); err != nil { // "hi" -> "Xi"
+		t.Fatalf("WriteAt: unexpected error: %v", err)
+	}
+
+	if _, err := s.readAt(0); !errors.Is(err, record.ErrCorrupt) {
+		t.Errorf("err = %v, want ErrCorrupt", err)
+	}
+}
+
+func TestReadAtIgnoresJunk(t *testing.T) {
+	s := mustOpen(t, t.TempDir(), 1000)
+	mustAppend(t, s, "hi")
+	if _, err := s.file.Write([]byte("junk")); err != nil { // skips append, so s.size stays 10
+		t.Fatalf("Write: unexpected error: %v", err)
+	}
+
+	if _, err := s.readAt(10); !errors.Is(err, io.EOF) {
+		t.Errorf("err = %v, want io.EOF", err)
+	}
+}
+
+func TestReadAtKeepsFilePosition(t *testing.T) {
+	s := mustOpen(t, t.TempDir(), 1000)
+	mustAppend(t, s, "hi")
+	mustAppend(t, s, "hello")
+
+	before, err := s.file.Seek(0, io.SeekCurrent) // move by 0 = just report the position
+	if err != nil {
+		t.Fatalf("Seek: unexpected error: %v", err)
+	}
+	mustReadAt(t, s, 0)
+	after, err := s.file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		t.Fatalf("Seek: unexpected error: %v", err)
+	}
+	if before != after {
+		t.Errorf("file position moved from %d to %d", before, after)
+	}
+}
